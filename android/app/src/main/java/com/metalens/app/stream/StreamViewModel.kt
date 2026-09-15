@@ -17,18 +17,26 @@ import com.meta.wearable.dat.camera.types.StreamSessionState
 import com.meta.wearable.dat.camera.types.VideoFrame
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.selectors.DeviceSelector
+import com.metalens.app.recordings.RecordingStorage
+import com.metalens.app.recordings.StreamRecorder
 import com.metalens.app.settings.AppSettings
 import com.metalens.app.wearables.WearablesViewModel
 import java.io.ByteArrayOutputStream
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.Dispatchers
+import java.util.concurrent.Executors
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class StreamViewModel(
     application: Application,
@@ -36,7 +44,13 @@ class StreamViewModel(
 ) : AndroidViewModel(application) {
     companion object {
         private const val TAG = "StreamViewModel"
+        private const val FRAME_RATE = 24
+
+        // Bounded so a slow encoder drops frames instead of growing the queue without limit.
+        private const val ENCODE_QUEUE_CAPACITY = 4
     }
+
+    private data class PendingFrame(val bytes: ByteArray, val width: Int, val height: Int)
 
     private val deviceSelector: DeviceSelector = wearablesViewModel.deviceSelector
     private var streamSession: StreamSession? = null
@@ -48,6 +62,12 @@ class StreamViewModel(
     private var stateJob: Job? = null
     private var lastSessionState: StreamSessionState? = null
 
+    private val storage = RecordingStorage(application)
+    private val encoderDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    private val encoderScope = CoroutineScope(encoderDispatcher + SupervisorJob())
+    private var frameChannel: Channel<PendingFrame>? = null
+    private var encoderJob: Job? = null
+
     fun startStream() {
         Log.d(TAG, "startStream()")
         stopStream()
@@ -58,7 +78,7 @@ class StreamViewModel(
                 Wearables.startStreamSession(
                     getApplication(),
                     deviceSelector,
-                    StreamConfiguration(videoQuality = AppSettings.getCameraVideoQuality(getApplication()), 24),
+                    StreamConfiguration(videoQuality = AppSettings.getCameraVideoQuality(getApplication()), FRAME_RATE),
                 ).also { streamSession = it }
             } catch (t: Throwable) {
                 Log.e(TAG, "startStreamSession() failed", t)
@@ -111,13 +131,85 @@ class StreamViewModel(
 
     fun stopStream() {
         Log.d(TAG, "stopStream()")
+        stopRecording()
         videoJob?.cancel()
         videoJob = null
         stateJob?.cancel()
         stateJob = null
         streamSession?.close()
         streamSession = null
-        _uiState.update { StreamUiState() }
+        _uiState.update { StreamUiState(lastSavedRecordingId = it.lastSavedRecordingId) }
+    }
+
+    fun startRecording() {
+        if (frameChannel != null) return
+
+        val startedAtMs = System.currentTimeMillis()
+        val pending = storage.createPending(startedAtMs)
+        if (pending == null) {
+            _uiState.update { it.copy(recentError = "Could not create recording file") }
+            return
+        }
+
+        val channel =
+            Channel<PendingFrame>(
+                capacity = ENCODE_QUEUE_CAPACITY,
+                onBufferOverflow = BufferOverflow.DROP_OLDEST,
+            )
+        frameChannel = channel
+
+        encoderJob =
+            encoderScope.launch {
+                val recorder = StreamRecorder(pending.descriptor.fileDescriptor)
+                var started = false
+                try {
+                    for (frame in channel) {
+                        if (!started) {
+                            recorder.start(frame.width, frame.height, FRAME_RATE, withAudio = true)
+                            started = true
+                        }
+                        recorder.encode(frame.bytes, frame.width, frame.height)
+                        _uiState.update { it.copy(recordingFrameCount = it.recordingFrameCount + 1) }
+                    }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Recording failed", t)
+                    _uiState.update {
+                        it.copy(recentError = t.message ?: "Recording failed")
+                    }
+                } finally {
+                    // Runs even when the scope is cancelled, so a stopped recording is still
+                    // muxed into a playable file rather than left truncated.
+                    val result = if (started) runCatching { recorder.stop() }.getOrNull() else null
+                    // The descriptor must outlive the muxer and be closed before publishing,
+                    // otherwise MediaStore reports a zero-length file.
+                    runCatching { pending.descriptor.close() }
+
+                    if (result != null) {
+                        storage.publish(pending)
+                        _uiState.update { it.copy(lastSavedRecordingId = pending.uri.toString()) }
+                        Log.d(TAG, "Saved recording ${pending.uri} (${result.durationMs}ms)")
+                    } else {
+                        storage.discard(pending)
+                        Log.w(TAG, "Recording produced no output")
+                    }
+                }
+            }
+
+        _uiState.update {
+            it.copy(
+                isRecording = true,
+                recordingStartedAtMs = startedAtMs,
+                recordingFrameCount = 0,
+            )
+        }
+    }
+
+    fun stopRecording() {
+        val channel = frameChannel ?: return
+        frameChannel = null
+        // Closing lets the encoder drain what is queued, then finalize the file.
+        channel.close()
+        _uiState.update { it.copy(isRecording = false, recordingStartedAtMs = null) }
     }
 
     private fun handleVideoFrame(videoFrame: VideoFrame) {
@@ -125,10 +217,18 @@ class StreamViewModel(
             if (_uiState.value.frameCount == 0L) {
                 Log.d(TAG, "First video frame received: ${videoFrame.width}x${videoFrame.height}")
             }
+
+            // Copy before returning: the SDK reuses the frame buffer once this collector yields.
+            val bytes = copyFrameBytes(videoFrame)
+            val width = videoFrame.width
+            val height = videoFrame.height
+
+            frameChannel?.trySend(PendingFrame(bytes, width, height))
+
             viewModelScope.launch {
                 val bitmap =
                     withContext(Dispatchers.Default) {
-                        decodeToBitmap(videoFrame)
+                        decodeToBitmap(bytes, width, height)
                     }
                 _uiState.update { it.copy(videoFrame = bitmap, frameCount = it.frameCount + 1) }
             }
@@ -138,20 +238,21 @@ class StreamViewModel(
         }
     }
 
-    private fun decodeToBitmap(videoFrame: VideoFrame): android.graphics.Bitmap? {
+    private fun copyFrameBytes(videoFrame: VideoFrame): ByteArray {
         val buffer = videoFrame.buffer
-        val dataSize = buffer.remaining()
-        val byteArray = ByteArray(dataSize)
-
+        val byteArray = ByteArray(buffer.remaining())
         val originalPosition = buffer.position()
         buffer.get(byteArray)
         buffer.position(originalPosition)
+        return byteArray
+    }
 
-        val nv21 = convertI420toNV21(byteArray, videoFrame.width, videoFrame.height)
-        val image = YuvImage(nv21, ImageFormat.NV21, videoFrame.width, videoFrame.height, null)
+    private fun decodeToBitmap(i420: ByteArray, width: Int, height: Int): android.graphics.Bitmap? {
+        val nv21 = convertI420toNV21(i420, width, height)
+        val image = YuvImage(nv21, ImageFormat.NV21, width, height, null)
         val out =
             ByteArrayOutputStream().use { stream ->
-                image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 50, stream)
+                image.compressToJpeg(Rect(0, 0, width, height), 50, stream)
                 stream.toByteArray()
             }
 
@@ -176,6 +277,13 @@ class StreamViewModel(
     override fun onCleared() {
         super.onCleared()
         stopStream()
+        val job = encoderJob
+        if (job == null) {
+            encoderDispatcher.close()
+        } else {
+            // Shut the thread down only once the final mux has been written.
+            job.invokeOnCompletion { encoderDispatcher.close() }
+        }
     }
 
     class Factory(
@@ -194,4 +302,3 @@ class StreamViewModel(
         }
     }
 }
-

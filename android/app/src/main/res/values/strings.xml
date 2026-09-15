@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">MetaLens</string>
+    <string name="app_name">Clara-Assistant</string>
 
-    <string name="home_title">MetaLens AI</string>
-    <string name="home_subtitle">Talk to ChatGPT, take pictures, and analyze what you see through your Meta Glasses.</string>
+    <string name="home_title">Clara-Assistant</string>
+    <string name="home_subtitle">Take pictures, analyze what you see, and record live video through your Meta Glasses.</string>
     <string name="home_glasses_icon_description">Smart glasses</string>
 
-    <string name="start_conversation">Start Conversation</string>
-    <string name="start_conversation_subtitle">Talk hands-free with AI</string>
     <string name="conversation_title">Conversation</string>
     <string name="conversation_start">Start</string>
     <string name="conversation_speak">Speak</string>
@@ -96,6 +94,14 @@
     <string name="stop_streaming">Stop Streaming</string>
     <string name="stream_title">Streaming</string>
     <string name="live_stream">Live stream</string>
+    <string name="start_recording">Start recording</string>
+    <string name="stop_recording">Stop recording</string>
+
+    <string name="tab_recordings">Clips</string>
+    <string name="recordings_title">Recordings</string>
+    <string name="recordings_empty">No recordings yet</string>
+    <string name="recordings_delete">Delete recording</string>
+    <string name="recordings_not_found">Recording not found</string>
 
     <string name="picture_analysis">Picture Analysis</string>
     <string name="picture_analysis_subtitle">Capture a photo from your glasses</string>

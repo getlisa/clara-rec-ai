@@ -107,4 +107,7 @@ dependencies {
     implementation(libs.androidx.exifinterface)
 
     implementation(libs.okhttp)
+
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }

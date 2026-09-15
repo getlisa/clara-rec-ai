@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -32,7 +31,6 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
     isGlassesConnected: Boolean = false,
     isCapturingPhoto: Boolean = false,
-    onStartConversation: () -> Unit = {},
     onStartStreaming: () -> Unit = {},
     onPictureAnalysis: () -> Unit = {},
 ) {
@@ -58,17 +56,6 @@ fun HomeScreen(
         )
 
         Spacer(modifier = Modifier.height(20.dp))
-
-        FeatureActionCard(
-            title = stringResource(R.string.start_conversation),
-            subtitle = stringResource(R.string.start_conversation_subtitle),
-            icon = Icons.Filled.ChatBubble,
-            enabled = isGlassesConnected,
-            onClick = onStartConversation,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
 
         FeatureActionCard(
             title = stringResource(R.string.start_streaming),

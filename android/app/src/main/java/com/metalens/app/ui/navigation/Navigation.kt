@@ -6,6 +6,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -33,10 +34,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.metalens.app.R
 import com.metalens.app.ui.components.MetaLensTopBar
-import com.metalens.app.ui.screens.ConversationScreen
 import com.metalens.app.ui.screens.HistoryDetailScreen
 import com.metalens.app.ui.screens.HistoryScreen
 import com.metalens.app.ui.screens.HomeScreen
+import com.metalens.app.ui.screens.RecordingPlaybackScreen
+import com.metalens.app.ui.screens.RecordingsScreen
 import com.metalens.app.ui.screens.SettingsScreen
 import com.metalens.app.wearables.WearablesViewModel
 
@@ -51,13 +53,17 @@ sealed class MetaLensRoute(
     }
     data object Settings : MetaLensRoute("settings", R.string.tab_settings)
     data object Stream : MetaLensRoute("stream", R.string.stream_title)
-    data object Conversation : MetaLensRoute("conversation", R.string.conversation_title)
     data object PictureAnalysis : MetaLensRoute("picture-analysis", R.string.picture_analysis)
+    data object Recordings : MetaLensRoute("recordings", R.string.tab_recordings)
+    data object RecordingPlayback : MetaLensRoute("recordings/{recordingId}", R.string.recordings_title) {
+        fun createRoute(recordingId: String): String = "recordings/$recordingId"
+    }
 }
 
 private val bottomTabs = listOf(
     MetaLensRoute.Home,
     MetaLensRoute.History,
+    MetaLensRoute.Recordings,
     MetaLensRoute.Settings,
 )
 
@@ -74,9 +80,9 @@ private fun MetaLensScaffold(navController: NavHostController) {
     val currentTab = bottomTabs.firstOrNull { it.route == currentRoute } ?: MetaLensRoute.Home
     val isFullScreenRoute =
         currentRoute == MetaLensRoute.Stream.route ||
-            currentRoute == MetaLensRoute.Conversation.route ||
             currentRoute == MetaLensRoute.HistoryDetail.route ||
-            currentRoute == MetaLensRoute.PictureAnalysis.route
+            currentRoute == MetaLensRoute.PictureAnalysis.route ||
+            currentRoute == MetaLensRoute.RecordingPlayback.route
     val canNavigateBack = navController.previousBackStackEntry != null
     val topBarTitle = stringResource(R.string.home_title)
 
@@ -129,8 +135,9 @@ private fun MetaLensScaffold(navController: NavHostController) {
                                             MetaLensRoute.HistoryDetail -> Icons.Filled.History
                                             MetaLensRoute.Settings -> Icons.Filled.Settings
                                             MetaLensRoute.Stream -> Icons.Filled.Home
-                                            MetaLensRoute.Conversation -> Icons.Filled.Home
                                             MetaLensRoute.PictureAnalysis -> Icons.Filled.CameraAlt
+                                            MetaLensRoute.Recordings -> Icons.Filled.Videocam
+                                            MetaLensRoute.RecordingPlayback -> Icons.Filled.Videocam
                                         },
                                     contentDescription = stringResource(tab.titleResId),
                                 )
@@ -172,7 +179,6 @@ private fun MetaLensNavHost(
                 modifier = modifier,
                 isGlassesConnected = wearablesUiState.hasActiveDevice,
                 isCapturingPhoto = wearablesUiState.isCapturingPhoto || wearablesUiState.isPreparingPhotoSession,
-                onStartConversation = { navController.navigate(MetaLensRoute.Conversation.route) },
                 onStartStreaming = { navController.navigate(MetaLensRoute.Stream.route) },
                 onPictureAnalysis = {
                     wearablesViewModel.resetPictureAnalysis()
@@ -203,14 +209,26 @@ private fun MetaLensNavHost(
                 modifier = modifier,
             )
         }
-        composable(MetaLensRoute.Stream.route) {
-            com.metalens.app.ui.screens.StreamScreen(
+        composable(MetaLensRoute.Recordings.route) {
+            RecordingsScreen(
                 modifier = modifier,
-                onStop = { navController.popBackStack() },
+                onOpenRecording = { id ->
+                    navController.navigate(MetaLensRoute.RecordingPlayback.createRoute(id))
+                },
             )
         }
-        composable(MetaLensRoute.Conversation.route) {
-            ConversationScreen(
+        composable(
+            route = MetaLensRoute.RecordingPlayback.route,
+            arguments = listOf(navArgument("recordingId") { type = NavType.StringType }),
+        ) { entry ->
+            val recordingId = entry.arguments?.getString("recordingId").orEmpty()
+            RecordingPlaybackScreen(
+                recordingId = recordingId,
+                modifier = modifier,
+            )
+        }
+        composable(MetaLensRoute.Stream.route) {
+            com.metalens.app.ui.screens.StreamScreen(
                 modifier = modifier,
                 onStop = { navController.popBackStack() },
             )

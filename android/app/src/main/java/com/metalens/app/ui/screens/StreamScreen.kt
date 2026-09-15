@@ -1,6 +1,10 @@
 package com.metalens.app.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -12,7 +16,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -20,16 +32,22 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
 import com.meta.wearable.dat.camera.types.StreamSessionState
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.Permission
@@ -61,6 +79,23 @@ fun StreamScreen(
 
     val uiState by streamViewModel.uiState.collectAsStateWithLifecycle()
 
+    // Recording falls back to video-only when the mic is denied, so a refusal must not block it.
+    val micPermissionLauncher =
+        rememberLauncherForActivityResult(RequestPermission()) { _ ->
+            streamViewModel.startRecording()
+        }
+
+    fun beginRecording() {
+        val granted =
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            streamViewModel.startRecording()
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     LaunchedEffect(Unit) {
         // Ensure wearable camera permission before starting stream
         val permission = Permission.CAMERA
@@ -91,6 +126,13 @@ fun StreamScreen(
                 contentDescription = stringResource(R.string.live_stream),
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
+            )
+        }
+
+        if (uiState.isRecording) {
+            RecordingIndicator(
+                startedAtMs = uiState.recordingStartedAtMs,
+                modifier = Modifier.align(Alignment.TopEnd).padding(16.dp),
             )
         }
 
@@ -152,9 +194,40 @@ fun StreamScreen(
                     .fillMaxWidth()
                     .height(64.dp)
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.End,
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val canRecord = uiState.videoFrame != null
+            IconButton(
+                onClick = {
+                    if (uiState.isRecording) {
+                        streamViewModel.stopRecording()
+                    } else {
+                        beginRecording()
+                    }
+                },
+                enabled = canRecord,
+                colors =
+                    IconButtonDefaults.iconButtonColors(
+                        contentColor = if (uiState.isRecording) Color.White else Color.Red,
+                    ),
+                modifier = Modifier.size(56.dp).clip(CircleShape),
+            ) {
+                Icon(
+                    imageVector =
+                        if (uiState.isRecording) Icons.Filled.Stop else Icons.Filled.FiberManualRecord,
+                    contentDescription =
+                        stringResource(
+                            if (uiState.isRecording) {
+                                R.string.stop_recording
+                            } else {
+                                R.string.start_recording
+                            },
+                        ),
+                    modifier = Modifier.size(40.dp),
+                )
+            }
+
             TextButton(
                 onClick = {
                     streamViewModel.stopStream()
@@ -166,5 +239,44 @@ fun StreamScreen(
         }
         }
     }
+}
+
+@Composable
+private fun RecordingIndicator(
+    startedAtMs: Long?,
+    modifier: Modifier = Modifier,
+) {
+    var elapsedMs by remember(startedAtMs) { mutableLongStateOf(0L) }
+
+    LaunchedEffect(startedAtMs) {
+        if (startedAtMs == null) return@LaunchedEffect
+        while (true) {
+            elapsedMs = System.currentTimeMillis() - startedAtMs
+            delay(500)
+        }
+    }
+
+    Row(
+        modifier =
+            modifier
+                .background(Color.Black.copy(alpha = 0.5f), shape = MaterialTheme.shapes.medium)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Color.Red))
+        Text(
+            text = formatElapsed(elapsedMs),
+            color = Color.White,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+private fun formatElapsed(elapsedMs: Long): String {
+    val totalSeconds = (elapsedMs / 1000L).coerceAtLeast(0L)
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%02d:%02d".format(minutes, seconds)
 }
 

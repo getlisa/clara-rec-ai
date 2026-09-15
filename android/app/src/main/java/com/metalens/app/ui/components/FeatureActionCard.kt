@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -75,8 +75,8 @@ fun FeatureActionCard(
 @Composable
 private fun FeatureActionCardPreview() {
     FeatureActionCard(
-        title = stringResource(R.string.start_conversation),
-        icon = Icons.Filled.ChatBubble,
+        title = stringResource(R.string.start_streaming),
+        icon = Icons.Filled.Videocam,
         onClick = {},
     )
 }
