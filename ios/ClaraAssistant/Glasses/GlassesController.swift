@@ -43,6 +43,9 @@ final class GlassesController {
     private(set) var sessionState: DeviceSessionState = .stopped
     private(set) var streamState: StreamState = .stopped
     private(set) var framesPerSecond: Double = 0
+    /// Frames actually drawn. Diverging from framesPerSecond means the picture is frozen
+    /// while frames still arrive — a rendering fault, not a Bluetooth one.
+    private(set) var renderedPerSecond: Double = 0
     private(set) var recordingState: RecordingState = .idle
     private(set) var audioFromGlasses = false
     private(set) var statusMessage: String?
@@ -73,6 +76,10 @@ final class GlassesController {
 
     private let frameRateMeter = FrameRateMeter()
     private let previewNeedsKeyframe = AtomicFlag(true)
+    private let notReadyStreak = AtomicCounter()
+
+    /// ~1s at 24fps. Below this, back-pressure is normal and self-corrects.
+    private static let notReadyLimit = 24
 
     private static let logger = Logger(subsystem: "ai.justclara.ClaraAssistant", category: "Glasses")
 
@@ -396,6 +403,7 @@ final class GlassesController {
         observeWearables()
         streamState = .stopped
         framesPerSecond = 0
+        renderedPerSecond = 0
     }
 
     /// Runs on the SDK's delivery thread. Recording and decoding happen here rather than on
@@ -406,54 +414,78 @@ final class GlassesController {
         let sampleBuffer = frame.sampleBuffer
 
         recorder.appendVideo(sampleBuffer)
-        enqueueForPreview(sampleBuffer)
+        let didRender = enqueueForPreview(sampleBuffer)
 
-        if let fps = frameRateMeter.tick() {
+        if let rates = frameRateMeter.tick(rendered: didRender) {
             let renderer = previewLayer.sampleBufferRenderer
             Self.logger.info(
                 """
-                PREVIEW fps=\(fps, privacy: .public) \
+                PREVIEW received=\(rates.received, privacy: .public) \
+                rendered=\(rates.rendered, privacy: .public) \
                 status=\(renderer.status.rawValue, privacy: .public) \
                 ready=\(renderer.isReadyForMoreMediaData, privacy: .public) \
+                needsFlush=\(renderer.requiresFlushToResumeDecoding, privacy: .public) \
                 needsKeyframe=\(self.previewNeedsKeyframe.value, privacy: .public) \
                 error=\(renderer.error?.localizedDescription ?? "none", privacy: .public)
                 """
             )
             Task { @MainActor [weak self] in
-                self?.framesPerSecond = fps
+                self?.framesPerSecond = rates.received
+                self?.renderedPerSecond = rates.rendered
             }
         }
     }
 
-    /// Enqueues a copy for display. The copy exists so setting the "display immediately"
-    /// attachment cannot disturb the buffer already handed to the recorder.
-    private nonisolated func enqueueForPreview(_ sampleBuffer: CMSampleBuffer) {
+    /// Enqueues a copy for display, returning whether the frame actually reached the renderer.
+    /// The copy exists so setting the "display immediately" attachment cannot disturb the
+    /// buffer already handed to the recorder.
+    @discardableResult
+    private nonisolated func enqueueForPreview(_ sampleBuffer: CMSampleBuffer) -> Bool {
         let renderer = previewLayer.sampleBufferRenderer
 
-        if renderer.status == .failed {
+        // The renderer fails — and stays failed — when the system takes decoder resources
+        // away, e.g. on backgrounding. Only a flush clears it; without this the picture
+        // freezes on the last frame indefinitely.
+        if renderer.status == .failed || renderer.requiresFlushToResumeDecoding {
             Self.logger.error(
-                "Preview renderer failed: \(renderer.error?.localizedDescription ?? "unknown", privacy: .public) — flushing"
+                """
+                Preview renderer stalled (status=\(renderer.status.rawValue, privacy: .public) \
+                needsFlush=\(renderer.requiresFlushToResumeDecoding, privacy: .public)): \
+                \(renderer.error?.localizedDescription ?? "none", privacy: .public) — flushing
+                """
             )
             renderer.flush()
             previewNeedsKeyframe.set(true)
+            notReadyStreak.reset()
         }
 
         // A decoder cannot start mid-GOP: the first buffer it sees must be a keyframe, or
         // it discards everything until one arrives and the screen stays black.
         if previewNeedsKeyframe.value {
-            guard RecordingWriter.isKeyframe(sampleBuffer) else { return }
+            guard RecordingWriter.isKeyframe(sampleBuffer) else { return false }
             previewNeedsKeyframe.set(false)
-            Self.logger.info("Preview starting at keyframe")
+            Self.logger.info("Preview resynced at keyframe")
         }
 
-        guard renderer.isReadyForMoreMediaData else { return }
+        guard renderer.isReadyForMoreMediaData else {
+            // Back-pressure is normal for a frame or two. A sustained streak means the queue
+            // is wedged, and silently dropping forever would look identical to a freeze.
+            if notReadyStreak.increment() >= Self.notReadyLimit {
+                Self.logger.error("Preview not ready for \(Self.notReadyLimit, privacy: .public) frames — flushing")
+                renderer.flush()
+                previewNeedsKeyframe.set(true)
+                notReadyStreak.reset()
+            }
+            return false
+        }
+        notReadyStreak.reset()
 
         var copy: CMSampleBuffer?
         guard CMSampleBufferCreateCopy(
             allocator: kCFAllocatorDefault,
             sampleBuffer: sampleBuffer,
             sampleBufferOut: &copy
-        ) == noErr, let copy else { return }
+        ) == noErr, let copy else { return false }
 
         // Stream timestamps are not on the layer's timebase, so ask it to draw on arrival.
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(copy, createIfNecessary: true),
@@ -468,6 +500,7 @@ final class GlassesController {
         }
 
         renderer.enqueue(copy)
+        return true
     }
 
     // MARK: - Recording
@@ -546,22 +579,44 @@ final class AtomicFlag {
     }
 }
 
+/// Lock-guarded counter shared with the frame-delivery thread.
+final class AtomicCounter {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        value += 1
+        return value
+    }
+
+    func reset() {
+        lock.lock()
+        value = 0
+        lock.unlock()
+    }
+}
+
 /// Measures the delivered frame rate. Called from the frame-delivery thread; returns a value
 /// about once a second rather than on every frame, so the UI is not updated 24 times a second.
 final class FrameRateMeter {
     private let lock = NSLock()
     private var windowStart = Date()
     private var count = 0
+    private var renderedCount = 0
 
-    func tick() -> Double? {
+    func tick(rendered didRender: Bool) -> (received: Double, rendered: Double)? {
         lock.lock()
         defer { lock.unlock() }
         count += 1
+        if didRender { renderedCount += 1 }
         let elapsed = Date().timeIntervalSince(windowStart)
         guard elapsed >= 1.0 else { return nil }
-        let fps = Double(count) / elapsed
+        let rates = (Double(count) / elapsed, Double(renderedCount) / elapsed)
         count = 0
+        renderedCount = 0
         windowStart = Date()
-        return fps
+        return rates
     }
 }

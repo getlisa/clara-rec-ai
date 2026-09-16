@@ -65,9 +65,10 @@
 		<string>com.meta.ar.wearable</string>
 	</array>
 
+	<!-- No "processing" mode: it requires BGTaskSchedulerPermittedIdentifiers, and this app
+	     schedules no background tasks. -->
 	<key>UIBackgroundModes</key>
 	<array>
-		<string>processing</string>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
 		<string>external-accessory</string>
@@ -87,6 +88,11 @@
 	<array>
 		<string>_bonjour._tcp</string>
 	</array>
+	<!-- Required even though the app never opens the phone camera itself: the Meta Wearables
+	     SDK links camera APIs, and App Store validation rejects the build without a purpose
+	     string (ITMS-90683). -->
+	<key>NSCameraUsageDescription</key>
+	<string>Clara-Assistant can use your phone's camera to simulate a glasses camera feed when no glasses are connected.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Clara-Assistant records audio alongside video from your glasses. When the glasses are connected, audio is captured from their microphone.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

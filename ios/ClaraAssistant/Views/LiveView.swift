@@ -11,7 +11,7 @@ struct LiveView: View {
             PreviewLayerView(layer: controller.previewLayer)
                 .ignoresSafeArea()
 
-            if controller.framesPerSecond == 0 {
+            if controller.framesPerSecond == 0 && controller.renderedPerSecond == 0 {
                 ProgressView()
                     .tint(.white)
             }
@@ -62,7 +62,8 @@ private struct DiagnosticsOverlay: View {
             Text("session: \(controller.sessionState.description)")
             Text("stream: \(String(describing: controller.streamState))")
             Text("devices: \(controller.devices.count)")
-            Text("fps: \(controller.framesPerSecond, specifier: "%.1f")")
+            Text("in:  \(controller.framesPerSecond, specifier: "%.1f") fps")
+            Text("out: \(controller.renderedPerSecond, specifier: "%.1f") fps")
             Text("quality: \(AppSettings.videoQuality.title)")
         }
         .font(.caption2.monospaced())
