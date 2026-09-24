@@ -42,8 +42,23 @@ Audio is **not** part of the DAT camera stream — the SDK exposes no audio API 
 
 Denying the microphone permission is not fatal on either platform — recording continues without audio.
 
-### 📸 Picture analysis (Android)
-Takes a picture through the glasses and describes what the camera sees, using OpenAI.
+### 📸 Photos
+Takes a still through the glasses. The two platforms reach it differently:
+
+- **Android** — a dedicated **Picture analysis** screen: a 3-2-1 countdown, then the photo is described aloud by OpenAI.
+- **iOS** — a shutter button in the live view, capturing a JPEG straight off the running stream.
+
+### ☁️ Cloud backup (optional)
+Captured photos can additionally be uploaded to an **S3 bucket**, namespaced per author, so several people testing the app never overwrite each other:
+
+```
+photos/shivam-a1b2c3d4/2026/09/22/20260922-143012-c0e9785f45dc.jpg
+       └── author ───┘ └─ date ─┘ └─ time ─┘ └─ content hash ┘
+```
+
+Each install generates a stable author id on first use; an optional author name (Settings → Cloud backup) is slugified in front of it. The id is always present, so two people who pick the same name never collide. Objects also carry `x-amz-meta-author-id`, `-author-name` and `-captured-at`.
+
+Leave the credentials unset and the feature stays off — photos then never leave the phone. Setup and the required least-privilege IAM policy: [Android](android/README.md#image-upload-to-s3) · [iOS](#image-upload-to-s3-ios).
 
 ### 🕘 History (Android)
 Transcripts of past conversation sessions.
@@ -120,6 +135,60 @@ xcrun devicectl device install app --device <device-id> \
 
 `xcrun devicectl list devices` prints the device id. The device must be **unlocked** during install.
 
+### Image upload to S3 (iOS)
+
+Optional — skip it and photos stay on the device. Copy the template and fill it in:
+
+```bash
+cd ios
+cp Secrets.example.plist ClaraAssistant/Secrets.plist
+xcodegen generate
+```
+
+`ClaraAssistant/Secrets.plist` is gitignored. A plist rather than an `.xcconfig` because xcconfig
+treats `//` as a comment and AWS secret keys can legitimately contain it.
+
+| Key | Notes |
+| --- | --- |
+| `S3_BUCKET` | Must not contain a dot — that breaks TLS for virtual-hosted-style S3 URLs, and the app rejects it up front |
+| `AWS_REGION` | Defaults to `us-east-1` |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | |
+| `AWS_SESSION_TOKEN` | Only for temporary STS credentials |
+
+**Anything in the app bundle is readable by anyone who unzips the IPA**, so the IAM user must be
+able to do nothing else. `s3:PutObject` alone means a leaked key can add objects but cannot read,
+list or delete:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "s3:PutObject",
+    "Resource": "arn:aws:s3:::my-clara-photos/photos/*"
+  }]
+}
+```
+
+Enable bucket versioning so a leaked key cannot overwrite existing objects, and keep public access
+blocked. For anything beyond prototyping, move the credentials out of the app: have a small backend
+hand out pre-signed `PUT` URLs, or use a Cognito identity pool.
+
+### Tests (iOS)
+
+The AWS SigV4 signer and the author-prefix rules run as logic tests, with no host app and no
+glasses needed:
+
+```bash
+cd ios
+xcodebuild test -project ClaraAssistant.xcodeproj -scheme ClaraAssistantTests \
+  -destination 'platform=iOS Simulator,name=iPhone 17'
+```
+
+They assert the same vectors as the Android suite — AWS's published "PUT Object" example plus
+botocore-generated ones — so the two platforms cannot drift apart. A wrong signature otherwise
+surfaces only as an opaque S3 `403`.
+
 ### Meta app registration
 
 The app runs in **developer mode**, which needs no Wearables Developer Center account: `Info.plist` sets `MWDAT` → `MetaAppID` to `0`, alongside the app's URL scheme and your Apple `TeamID`. Shipping outside developer mode would require a registered app ID and client token from the Wearables Developer Center.
@@ -161,9 +230,10 @@ Then, in Clara-Assistant:
 
 ## Privacy
 
-- Images and audio are sent only to OpenAI, using your own account and API key, and only for AI processing.
+- Images and audio are sent to OpenAI only for AI processing, using your own account and API key.
 - Your OpenAI API key is stored locally on the device and is never logged.
-- Recordings stay on the device and are not uploaded anywhere.
+- **Video recordings** stay on the device and are never uploaded.
+- **Photos** stay on the device too, unless you configure an S3 bucket of your own — see [Cloud backup](#️-cloud-backup-optional). The credentials and the bucket are yours; there is no server operated by this project.
 - API communication uses HTTPS.
 
 ## Credits

@@ -39,6 +39,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.metalens.app.pictureanalysis.PictureAnalysisViewModel
+import com.metalens.app.upload.ImageUploadViewModel
+import com.metalens.app.upload.UploadStatus
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
@@ -57,9 +59,11 @@ fun PictureAnalysisScreen(
     val activity = LocalContext.current as ComponentActivity
     val wearablesViewModel: WearablesViewModel = viewModel(activity)
     val analysisViewModel: PictureAnalysisViewModel = viewModel(activity)
+    val uploadViewModel: ImageUploadViewModel = viewModel(activity)
     val permissionRequester = LocalWearablesPermissionRequester.current
     val wearablesState by wearablesViewModel.uiState.collectAsStateWithLifecycle()
     val analysisState by analysisViewModel.uiState.collectAsStateWithLifecycle()
+    val uploadState by uploadViewModel.uiState.collectAsStateWithLifecycle()
 
     var countdown by remember { mutableIntStateOf(0) }
     var isCountingDown by remember { mutableStateOf(false) }
@@ -122,9 +126,12 @@ fun PictureAnalysisScreen(
 
     LaunchedEffect(wearablesState.capturedPhoto) {
         // New photo => reset analysis so user always sees a fresh run.
-        if (wearablesState.capturedPhoto != null) {
+        val photo = wearablesState.capturedPhoto
+        if (photo != null) {
             analysisViewModel.reset()
-            analysisViewModel.analyze(wearablesState.capturedPhoto!!)
+            analysisViewModel.analyze(photo)
+            // Archiving runs alongside analysis; neither blocks the other.
+            uploadViewModel.uploadIfNeeded(photo)
         }
     }
 
@@ -264,6 +271,33 @@ fun PictureAnalysisScreen(
                         )
                     }
 
+                    when (val upload = uploadState.status) {
+                        is UploadStatus.Uploading ->
+                            Text(
+                                text = stringResource(R.string.upload_uploading),
+                                color = Color.White.copy(alpha = 0.8f),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        is UploadStatus.Uploaded ->
+                            Text(
+                                text =
+                                    stringResource(R.string.upload_uploaded) +
+                                        " · " +
+                                        stringResource(R.string.upload_author_prefix, uploadState.authorPrefix),
+                                color = Color.White.copy(alpha = 0.8f),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        is UploadStatus.Failed ->
+                            Text(
+                                text = stringResource(R.string.upload_failed, upload.message),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        // Idle and NotConfigured stay silent: uploading is optional, and a user
+                        // who never set up a bucket shouldn't be nagged on every capture.
+                        UploadStatus.Idle, UploadStatus.NotConfigured -> Unit
+                    }
+
                     Text(
                         text = analysisState.resultText ?: "",
                         color = Color.White,
@@ -294,6 +328,7 @@ fun PictureAnalysisScreen(
                         isCountingDown = false
                         wearablesViewModel.resetPictureAnalysis()
                         analysisViewModel.reset()
+                        uploadViewModel.reset()
                         wearablesViewModel.preparePhotoCaptureSession()
                     },
                 ) {
@@ -309,6 +344,12 @@ fun PictureAnalysisScreen(
                         },
                     ) {
                         Text(stringResource(R.string.picture_analysis_analyze), color = Color.White)
+                    }
+                }
+
+                if (photo != null && uploadState.canRetry) {
+                    TextButton(onClick = { uploadViewModel.upload(photo) }) {
+                        Text(stringResource(R.string.upload_retry), color = Color.White)
                     }
                 }
 
@@ -335,6 +376,7 @@ fun PictureAnalysisScreen(
                         isCountingDown = false
                         wearablesViewModel.resetPictureAnalysis()
                         analysisViewModel.reset()
+                        uploadViewModel.reset()
                         runCatching { tts.stop() }
                         onClose()
                     },

@@ -18,6 +18,12 @@ struct RootView: View {
             }
             .tabItem { Label("Clips", systemImage: "video") }
 
+            // Third, not last: Settings stays where people reach for it.
+            NavigationStack {
+                EstimatesRootView()
+            }
+            .tabItem { Label("Estimates", systemImage: "doc.text") }
+
             NavigationStack {
                 SettingsView(controller: controller)
                     .navigationTitle("Settings")
@@ -27,6 +33,9 @@ struct RootView: View {
         .task {
             controller.startObserving()
             controller.refreshDeviceInfos()
+            // At launch, not when the Estimates tab first appears: the Settings account row would
+            // otherwise say "Not signed in" to someone who is, until they visited that tab.
+            AuthSession.shared.restore()
         }
     }
 }

@@ -52,6 +52,21 @@ android {
             "OPENAI_MODEL",
             "\"${getBuildProperty("OPENAI_MODEL")}\"",
         )
+
+        // Image upload to S3. Same rules as above: define these in android/local.properties
+        // (NOT committed) or pass them with -P. Leaving them blank disables uploading.
+        //
+        // Anything compiled in here is extractable from the APK, so the IAM user behind these
+        // keys must be limited to s3:PutObject on this one bucket. See android/README.md.
+        listOf(
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_REGION",
+            "S3_BUCKET",
+        ).forEach { name ->
+            buildConfigField("String", name, "\"${getBuildProperty(name)}\"")
+        }
     }
 
     buildTypes {
@@ -107,6 +122,8 @@ dependencies {
     implementation(libs.androidx.exifinterface)
 
     implementation(libs.okhttp)
+
+    testImplementation(libs.junit)
 
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)

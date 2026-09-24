@@ -13,6 +13,39 @@ object AppSettings {
     private const val KEY_CAMERA_VIDEO_QUALITY = "camera_video_quality"
     private const val KEY_PICTURE_ANALYSIS_SYSTEM_INSTRUCTIONS = "picture_analysis_system_instructions_override"
     private const val KEY_CONVERSATION_SYSTEM_INSTRUCTIONS = "conversation_system_instructions_override"
+    private const val KEY_AUTHOR_ID = "author_id"
+    private const val KEY_AUTHOR_NAME = "author_name"
+
+    /**
+     * Stable per-install identifier for whoever is using this phone.
+     *
+     * The app has no accounts, so uploads are attributed to this id. It is generated once, on
+     * first read, and then kept for the lifetime of the install.
+     */
+    fun getAuthorId(context: Context): String {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.getString(KEY_AUTHOR_ID, null)?.takeIf { it.isNotBlank() }?.let { return it }
+
+        val generated = java.util.UUID.randomUUID().toString().replace("-", "").take(8)
+        prefs.edit().putString(KEY_AUTHOR_ID, generated).apply()
+        return generated
+    }
+
+    /** Optional human-readable label for the author. Blank until the user sets one. */
+    fun getAuthorName(context: Context): String {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_AUTHOR_NAME, null)?.trim().orEmpty()
+    }
+
+    fun setAuthorName(context: Context, name: String) {
+        val normalized = name.trim()
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (normalized.isBlank()) {
+            prefs.edit().remove(KEY_AUTHOR_NAME).apply()
+        } else {
+            prefs.edit().putString(KEY_AUTHOR_NAME, normalized).apply()
+        }
+    }
 
     fun getOpenAiApiKey(context: Context): String {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

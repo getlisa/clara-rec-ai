@@ -69,6 +69,34 @@ final class GlassesController {
     private let recorder = RecordingWriter()
     private let microphone = MicrophoneCapture()
 
+    /// Still photos captured from the live stream, and their upload to S3.
+    let imageUploader = ImageUploader()
+
+    /// Where a `captureStill()` has got to, for callers that show progress. Waking the glasses
+    /// and reaching `.streaming` over Bluetooth takes seconds, so this is not a formality.
+    enum CaptureStatus: Equatable {
+        case idle
+        /// Opening a session because nothing was streaming — the slow case.
+        case preparing
+        case capturing
+    }
+
+    private(set) var captureStatus: CaptureStatus = .idle
+
+    /// A photo the glasses sent that this app never requested. Stays nil unless the hardware
+    /// capture button turns out to reach us — shown in the live view so the answer is visible
+    /// without a debug console.
+    private(set) var unsolicitedPhoto: UIImage?
+
+    func clearUnsolicitedPhoto() { unsolicitedPhoto = nil }
+
+    /// Resolved by `handle(photo:)` when the JPEG arrives.
+    private var pendingCapture: CheckedContinuation<Data?, Never>?
+    private var captureTimeout: Task<Void, Never>?
+    /// True when `captureStill()` opened the session itself and must close it again. Never set
+    /// when the Live view owns the stream — tearing that down would kill someone's preview.
+    private var ownsTransientSession = false
+
     /// Compressed frames are handed straight to this layer, which decodes and draws them on
     /// the hardware path. Decoding to UIImage per frame and re-rendering a SwiftUI Image is
     /// far more expensive and cannot keep up at 24fps.
@@ -265,6 +293,7 @@ final class GlassesController {
             self.session = session
 
             tokens.append(session.statePublisher.listen { [weak self] state in
+                Diag.log("stream", "session → \(state.description)")
                 Task { @MainActor in self?.sessionState = state }
             })
 
@@ -293,13 +322,19 @@ final class GlassesController {
 
             let stream = camera.stream
             tokens.append(stream.statePublisher.listen { [weak self] state in
+                Diag.log("stream", "state → \(String(describing: state))")
                 Task { @MainActor in self?.streamState = state }
             })
             tokens.append(stream.errorPublisher.listen { [weak self] error in
+                Diag.log("stream", "error → \(error.description)")
                 Task { @MainActor in self?.statusMessage = "Stream error: \(error.description)" }
             })
             tokens.append(stream.videoFramePublisher.listen { [weak self] frame in
                 self?.handle(frame: frame)
+            })
+            // capturePhoto() only asks; the image itself arrives here, asynchronously.
+            tokens.append(stream.photoDataPublisher.listen { [weak self] photo in
+                Task { @MainActor in self?.handle(photo: photo) }
             })
 
             stream.start()
@@ -389,6 +424,135 @@ final class GlassesController {
             group.cancelAll()
             return result
         }
+    }
+
+    // MARK: - Photo capture
+
+    /// Asks the glasses for a still off the running stream. The JPEG arrives later, via the
+    /// photo listener installed in `startStreaming`.
+    func capturePhoto() {
+        guard let camera else {
+            statusMessage = "Start the stream before taking a photo"
+            return
+        }
+        guard camera.stream.capturePhoto(format: .jpeg) else {
+            statusMessage = "The glasses refused the photo request"
+            return
+        }
+        statusMessage = "Capturing photo…"
+    }
+
+    private func handle(photo: PhotoData) {
+        guard photo.format == .jpeg else {
+            // Only .jpeg is ever requested; HEIC would need transcoding before upload.
+            statusMessage = "Unexpected photo format from the glasses"
+            resumeCapture(nil)
+            return
+        }
+        // A `captureStill()` caller is waiting for these bytes; the live view's shutter is not,
+        // and still goes to the S3 uploader.
+        if pendingCapture != nil {
+            statusMessage = nil
+            resumeCapture(photo.data)
+            return
+        }
+
+        // Nobody asked for this one. The only way that can happen is the glasses producing a
+        // photo on their own — which is the open question about the hardware capture button.
+        // Announced loudly and on screen: routed silently to the uploader it would be invisible
+        // whenever S3 is unconfigured, making a working button look exactly like a dead one.
+        Diag.log("stream", "UNSOLICITED photo from the glasses (\(photo.data.count) bytes)")
+        statusMessage = "📸 Unsolicited photo from glasses — \(photo.data.count / 1024) KB"
+        unsolicitedPhoto = UIImage(data: photo.data)
+
+        imageUploader.uploadIfNeeded(jpeg: photo.data)
+    }
+
+    /// Captures a still from anywhere in the app, opening a short-lived camera session when
+    /// nothing is streaming.
+    ///
+    /// The Live view owns the long-lived session and tears it down in `onDisappear`, so from any
+    /// other tab `camera` is nil and `capturePhoto()` has nothing to ask. The Android build hit
+    /// the same wall and answered it with prepare-then-capture; this is that, as one call.
+    ///
+    /// Returns the JPEG exactly as the glasses produced it — no decode, no re-encode. Callers that
+    /// are going to upload it should run it through `JPEGOrientation.normalized(_:)` first.
+    func captureStill(timeout: TimeInterval = 8) async -> Data? {
+        // One at a time: a second request would strand the first continuation.
+        guard pendingCapture == nil, captureStatus == .idle else { return nil }
+
+        if camera == nil {
+            Diag.log("capture", "no live stream — opening a short-lived session")
+            captureStatus = .preparing
+            await startStreaming(resolution: AppSettings.videoQuality.resolution)
+            guard camera != nil else {
+                Diag.log("capture", "session did not open: \(statusMessage ?? "no reason given")")
+                captureStatus = .idle
+                return nil
+            }
+            ownsTransientSession = true
+        } else {
+            Diag.log("capture", "reusing the live view's stream")
+        }
+
+        guard await waitForStreaming(timeout: timeout) else {
+            statusMessage = "The glasses camera did not start in time"
+            finishCapture()
+            return nil
+        }
+
+        captureStatus = .capturing
+        let jpeg = await withCheckedContinuation { (continuation: CheckedContinuation<Data?, Never>) in
+            pendingCapture = continuation
+
+            // The SDK can accept the request and then never deliver — without this the caller
+            // would await forever and the shutter would stay stuck.
+            captureTimeout = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                guard !Task.isCancelled else { return }
+                self?.statusMessage = "The glasses did not return a photo"
+                self?.resumeCapture(nil)
+            }
+
+            if camera?.stream.capturePhoto(format: .jpeg) != true {
+                statusMessage = "The glasses refused the photo request"
+                resumeCapture(nil)
+            }
+        }
+
+        Diag.log("capture", jpeg.map { "got \($0.count) bytes of JPEG" } ?? "no photo returned")
+        finishCapture()
+        return jpeg
+    }
+
+    private func resumeCapture(_ data: Data?) {
+        guard let continuation = pendingCapture else { return }
+        pendingCapture = nil
+        captureTimeout?.cancel()
+        captureTimeout = nil
+        continuation.resume(returning: data)
+    }
+
+    /// Closes only what `captureStill()` opened.
+    private func finishCapture() {
+        captureStatus = .idle
+        guard ownsTransientSession else { return }
+        ownsTransientSession = false
+        stopStreaming()
+    }
+
+    /// The stream reaches `.streaming` asynchronously after `start()`; capturing before it does
+    /// is refused.
+    private func waitForStreaming(timeout: TimeInterval) async -> Bool {
+        guard let camera else { return false }
+        if camera.stream.state == .streaming { return true }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if camera.stream.state == .streaming { return true }
+        }
+        return camera.stream.state == .streaming
     }
 
     func stopStreaming() {

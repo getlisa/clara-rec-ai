@@ -5,7 +5,11 @@ struct SettingsView: View {
     let controller: GlassesController
 
     @AppStorage(AppSettings.videoQualityKey) private var videoQuality = VideoQuality.medium.rawValue
+    @AppStorage(AuthorIdentity.nameDefaultsKey) private var authorName = ""
     @State private var isWorking = false
+    @State private var authSession = AuthSession.shared
+
+    private let s3Config = S3Config.fromBundle()
 
     private var isRegistered: Bool { controller.registrationState == .registered }
 
@@ -102,6 +106,60 @@ struct SettingsView: View {
                 Text("Camera")
             } footer: {
                 Text("The glasses stream over Bluetooth, so higher quality needs a stronger link and may drop frames.")
+            }
+
+            Section {
+                TextField("Your name", text: $authorName)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+
+                LabeledContent("Upload folder") {
+                    Text(Author(id: AuthorIdentity.id, name: authorName).storagePrefix)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                LabeledContent("S3 bucket") {
+                    if s3Config.isConfigured {
+                        Text("\(s3Config.bucket) (\(s3Config.region))")
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
+                        Text("Not configured").foregroundStyle(.orange)
+                    }
+                }
+            } header: {
+                Text("Cloud backup")
+            } footer: {
+                if s3Config.isConfigured {
+                    Text("Photos you take in the live view are uploaded under this author, so they stay separate from other people's. The ID keeps two people with the same name apart.")
+                } else {
+                    Text("Add ClaraAssistant/Secrets.plist to upload photos to S3. Without it, photos stay on this device.")
+                }
+            }
+
+            Section {
+                if authSession.isAuthenticated {
+                    LabeledContent("Signed in", value: authSession.user?.displayName ?? "—")
+                    if let role = authSession.claims?.role {
+                        LabeledContent("Role", value: role.replacingOccurrences(of: "_", with: " ").capitalized)
+                    }
+                    Button("Sign out", role: .destructive) {
+                        Task { await authSession.signOut() }
+                    }
+                    .disabled(authSession.isWorking)
+                } else {
+                    Text("Not signed in — open the Estimates tab to sign in.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Estimates account")
+            } footer: {
+                Text("Only the Estimates tab needs an account. Recording and Clips work either way.")
             }
 
             Section {

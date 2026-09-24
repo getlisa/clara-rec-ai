@@ -38,7 +38,16 @@
 
     <string name="settings_group_hardware">Hardware settings</string>
     <string name="settings_group_ai">AI Settings</string>
+    <string name="settings_group_cloud">Cloud backup</string>
     <string name="settings_group_about">About</string>
+
+    <string name="settings_author_name">Author name</string>
+    <string name="settings_author_name_hint">Your name</string>
+    <string name="settings_author_name_unset">Not set — uploads use your device ID only</string>
+    <string name="settings_author_name_description">Photos you upload are stored under this author, so they stay separate from other people\'s.</string>
+    <string name="settings_author_upload_prefix">Upload folder</string>
+    <string name="settings_s3_bucket">S3 bucket</string>
+    <string name="settings_s3_not_configured">Not configured — photos stay on this device</string>
     <string name="settings_camera_quality_title">Camera quality</string>
     <string name="settings_camera_quality_low_desc">Battery-optimized (360x640)</string>
     <string name="settings_camera_quality_medium_desc">Balanced (504×896)</string>
@@ -113,4 +122,10 @@
     <string name="picture_analysis_result">AI Picture Analysis Result</string>
     <string name="picture_analysis_speak">Speak</string>
     <string name="picture_analysis_stop_speaking">Stop</string>
+
+    <string name="upload_uploading">Uploading to cloud…</string>
+    <string name="upload_uploaded">Saved to cloud</string>
+    <string name="upload_failed">Cloud upload failed: %1$s</string>
+    <string name="upload_retry">Retry upload</string>
+    <string name="upload_author_prefix">Author: %1$s</string>
 </resources>

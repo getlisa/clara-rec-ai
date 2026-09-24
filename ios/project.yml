@@ -7,6 +7,18 @@ options:
     iOS: "17.2"
   createIntermediateGroups: true
 
+# Only the test target gets an explicit scheme; the app keeps the one Xcode autocreates, so the
+# existing archive/TestFlight flow is untouched.
+schemes:
+  ClaraAssistantTests:
+    build:
+      targets:
+        ClaraAssistantTests: [test]
+    test:
+      config: Debug
+      targets:
+        - ClaraAssistantTests
+
 packages:
   MetaWearablesDAT:
     url: https://github.com/facebook/meta-wearables-dat-ios
@@ -30,7 +42,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.justclara.ClaraAssistant
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "3"
+        CURRENT_PROJECT_VERSION: "4"
         INFOPLIST_FILE: ClaraAssistant/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1"
@@ -39,3 +51,29 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: TS3BFX5G72
         ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+  ClaraAssistantTests:
+    type: bundle.unit-test
+    platform: iOS
+    # Deliberately no host application: these are logic tests over the S3 upload maths, so they
+    # compile the handful of files they need and run on a simulator in seconds, without the
+    # MWDAT SDK or a paired pair of glasses.
+    sources:
+      - path: Tests
+      - path: ClaraAssistant/Upload/AwsV4Signer.swift
+      - path: ClaraAssistant/Upload/Author.swift
+      # Estimating: only files with no MWDAT dependency, so these stay logic tests with no host app.
+      - path: ClaraAssistant/Estimating/Auth/AuthModels.swift
+      - path: ClaraAssistant/Estimating/Auth/AuthClient.swift
+      - path: ClaraAssistant/Estimating/Diagnostics/Diag.swift
+      - path: ClaraAssistant/Estimating/Net/APIConfig.swift
+      - path: ClaraAssistant/Estimating/Net/APIEnvelope.swift
+      - path: ClaraAssistant/Estimating/Net/MultipartBody.swift
+      - path: ClaraAssistant/Estimating/Photos/JPEGOrientation.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.justclara.ClaraAssistantTests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: TS3BFX5G72

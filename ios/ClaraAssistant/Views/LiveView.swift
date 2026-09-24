@@ -28,6 +28,30 @@ struct LiveView: View {
 
                 Spacer()
 
+                if let photo = controller.unsolicitedPhoto {
+                    VStack(spacing: 8) {
+                        Text("Photo arrived from the glasses")
+                            .font(.headline)
+                        Text("This app did not request it — the hardware capture button reached us.")
+                            .font(.caption)
+                            .multilineTextAlignment(.center)
+                        Image(uiImage: photo)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxHeight: 160)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        Button("Dismiss") { controller.clearUnsolicitedPhoto() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .padding()
+                    .background(.green.opacity(0.85), in: RoundedRectangle(cornerRadius: 14))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal)
+                }
+
+                UploadStatusView(uploader: controller.imageUploader)
+                    .padding(.horizontal)
+
                 if let status = controller.statusMessage {
                     Text(status)
                         .font(.footnote)
@@ -36,14 +60,25 @@ struct LiveView: View {
                         .background(.black.opacity(0.5), in: Capsule())
                 }
 
-                RecordButton(isRecording: controller.isRecording) {
-                    Task {
-                        if controller.isRecording {
-                            await controller.stopRecording()
-                        } else {
-                            await controller.startRecording()
+                HStack {
+                    ShutterButton(isBusy: controller.imageUploader.isUploading) {
+                        controller.capturePhoto()
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    RecordButton(isRecording: controller.isRecording) {
+                        Task {
+                            if controller.isRecording {
+                                await controller.stopRecording()
+                            } else {
+                                await controller.startRecording()
+                            }
                         }
                     }
+                    .frame(maxWidth: .infinity)
+
+                    // Balances the shutter so the record button stays centred.
+                    Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
                 }
                 .padding(.bottom, 24)
             }
@@ -90,6 +125,85 @@ private struct RecordButton: View {
             }
         }
         .accessibilityLabel(isRecording ? "Stop recording" : "Start recording")
+    }
+}
+
+private struct ShutterButton: View {
+    let isBusy: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .strokeBorder(.white.opacity(0.85), lineWidth: 3)
+                    .frame(width: 52, height: 52)
+                if isBusy {
+                    ProgressView().tint(.white)
+                } else {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.white)
+                }
+            }
+        }
+        .disabled(isBusy)
+        .accessibilityLabel("Take a photo")
+    }
+}
+
+/// Only speaks up once there is something to say: a capture with no bucket configured stays
+/// silent rather than nagging on every shot.
+private struct UploadStatusView: View {
+    let uploader: ImageUploader
+
+    var body: some View {
+        switch uploader.status {
+        case .idle, .notConfigured:
+            EmptyView()
+        case .uploading:
+            badge {
+                ProgressView().tint(.white).scaleEffect(0.7)
+                Text("Uploading to cloud…").foregroundStyle(.white)
+            }
+        case .uploaded:
+            badge {
+                Image(systemName: "checkmark.icloud.fill").foregroundStyle(.green)
+                Text("Saved to cloud · \(uploader.authorPrefix)")
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        case .failed(let message):
+            badge {
+                Image(systemName: "exclamationmark.icloud.fill").foregroundStyle(.orange)
+                Text(message)
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                Button("Retry") { uploader.retry() }
+                    .font(.footnote.bold())
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func badge(@ViewBuilder content: () -> some View) -> some View {
+        HStack(spacing: 8) {
+            if let capture = uploader.lastCapture {
+                Image(uiImage: capture)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 28, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+            content()
+        }
+        .font(.footnote)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

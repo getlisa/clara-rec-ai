@@ -7,7 +7,7 @@ See the [repository README](../README.md) for features and setup; this file cove
 ## Prerequisites
 - Android Studio (latest stable)
 - Android SDK + Platform Tools (installed via Android Studio)
-- JDK 17 — newer JDKs are not compatible with this project's Gradle version
+- JDK 17 or 21 — JDK 25 fails this project's Gradle/AGP version with a bare `25.0.3` error
 
 ## Configure `local.properties`
 
@@ -28,6 +28,60 @@ OPENAI_MODEL=gpt-4o
 ```
 
 More details: https://github.com/facebook/meta-wearables-dat-android
+
+## Image upload to S3
+
+Photos captured in **Picture Analysis** can additionally be archived to an S3 bucket. Leave these
+blank and the feature stays off — photos then never leave the phone.
+
+```properties
+S3_BUCKET=my-clara-photos
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+# Only for temporary STS credentials:
+AWS_SESSION_TOKEN=
+```
+
+Bucket names containing a dot are rejected: they break TLS certificate matching for the
+virtual-hosted-style URLs the uploader uses.
+
+### Objects are namespaced per author
+
+The app has no accounts, so each install generates a stable 8-character author id on first use.
+An optional **author name**, set in Settings → Cloud backup, is slugified onto the front of it:
+
+```
+photos/shivam-a1b2c3d4/2026/09/22/20260922-143012-c0e9785f45dc.jpg
+       └── author ───┘ └─ date ─┘ └─ time ─┘ └─ content hash ┘
+```
+
+The id is always part of the prefix, so two people who pick the same name never collide. Each
+object also carries `x-amz-meta-author-id`, `x-amz-meta-author-name` and `x-amz-meta-captured-at`.
+Renaming yourself only affects future uploads; existing objects keep the prefix they were written
+with, which is why the id — not the name — is the identity.
+
+### Least-privilege IAM policy
+
+Credentials compiled into an APK are readable by anyone who obtains the APK, so the IAM user must
+be able to do nothing else. `s3:PutObject` alone means a leaked key can add objects but cannot
+read, list or delete anything:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "s3:PutObject",
+    "Resource": "arn:aws:s3:::my-clara-photos/photos/*"
+  }]
+}
+```
+
+Enable bucket versioning so an attacker with the key cannot overwrite existing objects, and keep
+public access blocked. For anything beyond prototyping, move the credentials out of the app: have
+a small backend hand out pre-signed `PUT` URLs, or use a Cognito identity pool, so the app never
+holds a long-lived secret.
 
 ## Run in Android Studio (recommended)
 1. Open Android Studio.
@@ -55,6 +109,15 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## Tests
 
+Unit tests cover the AWS SigV4 signer and author-prefix rules, and run on the JVM:
+
+```bash
+./gradlew :app:testDebugUnitTest
+```
+
+The signer is pinned to AWS's own published "PUT Object" example plus vectors generated with
+botocore, because a wrong signature surfaces only as an opaque S3 `403`.
+
 Instrumented tests cover the video encoder and need a connected device or emulator:
 
 ```bash
@@ -63,7 +126,9 @@ Instrumented tests cover the video encoder and need a connected device or emulat
 
 ## Troubleshooting
 
-- **Gradle cannot find Java** — set `JAVA_HOME` to your JDK 17 path. A JDK newer than 17 will fail.
+- **The build fails with only a version number as the message** (e.g. `What went wrong: 25.0.3`) —
+  AGP cannot parse that JDK version. Point `JAVA_HOME` at a JDK 17 or 21 install:
+  `export JAVA_HOME=$(/usr/libexec/java_home -v 21)`
 - **Android SDK not found** — set `sdk.dir` in `local.properties`, or `ANDROID_HOME` in your environment.
 - **`Could not resolve com.meta.wearable:mwdat-*`** — your `github_token` is missing, expired, or lacks
   the `read:packages` scope.

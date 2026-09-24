@@ -24,8 +24,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothDisabled
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Coffee
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Feedback
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Wifi
@@ -52,6 +54,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -72,6 +75,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meta.wearable.dat.camera.types.VideoQuality
 import com.metalens.app.conversation.OpenAIRealtimeClient
 import com.metalens.app.settings.AppSettings
+import com.metalens.app.upload.Author
+import com.metalens.app.upload.S3Config
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -119,6 +124,11 @@ fun SettingsScreen(
         val initial = saved.takeIf { it in modelOptions } ?: OpenAIRealtimeClient.DEFAULT_MODEL
         mutableStateOf(initial)
     }
+
+    var authorName by rememberSaveable { mutableStateOf(AppSettings.getAuthorName(context)) }
+    val authorId = remember { AppSettings.getAuthorId(context) }
+    var showEditAuthorNameDialog by rememberSaveable { mutableStateOf(false) }
+    var authorNameDraft by rememberSaveable { mutableStateOf(authorName) }
 
     var showEditApiKeyDialog by rememberSaveable { mutableStateOf(false) }
     var showSelectModelDialog by rememberSaveable { mutableStateOf(false) }
@@ -184,6 +194,61 @@ fun SettingsScreen(
         if (showSelectCameraQualityDialog) {
             cameraQualityDraft = cameraQuality
         }
+    }
+
+    if (showEditAuthorNameDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditAuthorNameDialog = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
+            title = { Text(stringResource(R.string.settings_author_name)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = authorNameDraft,
+                        onValueChange = { authorNameDraft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text(stringResource(R.string.settings_author_name_hint)) },
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_author_name_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    // Shows how the name actually lands in the bucket, including the id that
+                    // keeps two people with the same name apart.
+                    SettingsKeyValueRow(
+                        key = stringResource(R.string.settings_author_upload_prefix),
+                        value = Author(id = authorId, name = authorNameDraft).storagePrefix,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val normalized = authorNameDraft.trim()
+                        AppSettings.setAuthorName(context, normalized)
+                        authorName = normalized
+                        authorNameDraft = normalized
+                        showEditAuthorNameDialog = false
+                    },
+                ) {
+                    Text(stringResource(R.string.common_save))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        authorNameDraft = authorName
+                        showEditAuthorNameDialog = false
+                    },
+                ) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
     }
 
     if (showEditApiKeyDialog) {
@@ -894,6 +959,46 @@ fun SettingsScreen(
                     isCheckingConnection = false
                 }
             },
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        SettingsSectionTitle(text = stringResource(R.string.settings_group_cloud))
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        FeatureActionCard(
+            title = stringResource(R.string.settings_author_name),
+            subtitle =
+                if (authorName.isBlank()) {
+                    stringResource(R.string.settings_author_name_unset)
+                } else {
+                    Author(id = authorId, name = authorName).storagePrefix
+                },
+            icon = Icons.Filled.Person,
+            onClick = {
+                authorNameDraft = authorName
+                showEditAuthorNameDialog = true
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        val s3Config = remember { S3Config.fromBuildConfig() }
+        FeatureActionCard(
+            title = stringResource(R.string.settings_s3_bucket),
+            subtitle =
+                if (s3Config.isConfigured) {
+                    "${s3Config.bucket} (${s3Config.region})"
+                } else {
+                    stringResource(R.string.settings_s3_not_configured)
+                },
+            icon = Icons.Filled.CloudUpload,
+            // Credentials are build-time only, so there is nothing to edit here.
+            enabled = false,
+            onClick = {},
             modifier = Modifier.fillMaxWidth(),
         )
 

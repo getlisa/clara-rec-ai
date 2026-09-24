@@ -12,6 +12,7 @@ exifInterface = "1.3.7"
 okhttp = "4.12.0"
 androidxTestJunit = "1.1.5"
 androidxTestRunner = "1.5.2"
+junit = "4.13.2"
 
 [libraries]
 # AndroidX Core
@@ -38,6 +39,9 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 mwdat-core = { group = "com.meta.wearable", name = "mwdat-core", version.ref = "mwdat" }
 mwdat-camera = { group = "com.meta.wearable", name = "mwdat-camera", version.ref = "mwdat" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+
+# Unit tests (JVM)
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 # Instrumented tests
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestJunit" }

@@ -36,6 +36,16 @@ enum VideoQuality: String, CaseIterable, Identifiable {
 enum AppSettings {
     static let videoQualityKey = "videoQuality"
 
+    /// Auto-import photos taken with the glasses' own button onto the open estimate.
+    /// On by default: it is the reason a technician wears the glasses while quoting.
+    static let handsFreeCaptureKey = "handsFreeCapture"
+
+    static var handsFreeCapture: Bool {
+        // `object(forKey:)` rather than `bool(forKey:)` so an unset value reads as the default
+        // rather than as false.
+        UserDefaults.standard.object(forKey: handsFreeCaptureKey) as? Bool ?? true
+    }
+
     static var videoQuality: VideoQuality {
         let raw = UserDefaults.standard.string(forKey: videoQualityKey) ?? VideoQuality.medium.rawValue
         return VideoQuality(rawValue: raw) ?? .medium
